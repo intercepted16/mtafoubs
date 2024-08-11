@@ -2,12 +2,104 @@ package main
 
 import (
 	"fmt"
+	"github.com/urfave/cli/v2"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+func restoreFile(c *cli.Context) error {
+	fileToRestore, err := filepath.Abs(c.Args().First())
+	if err != nil {
+		return err
+	}
+
+	if fileToRestore == "" {
+		return fmt.Errorf("file path is required")
+	}
+	verbose := c.Bool("verbose")
+	if verbose {
+		println("Restoring file:", fileToRestore)
+	}
+	// Get the Trash files and info directories
+	trashFilesPath := getTrashFilesPath()
+	trashInfoPath := getTrashInfoPath()
+	if verbose {
+		println("Found Trash files path:", trashFilesPath)
+		println("Found Trash info path:", trashInfoPath)
+	}
+	// Get the Trash info file path
+	fileToRestoreName := filepath.Base(fileToRestore)
+	trashInfoFilePath := filepath.Join(trashInfoPath, fileToRestoreName+".trashinfo")
+	// Check if the Trash info file exists
+	if _, err := os.Lstat(trashInfoFilePath); os.IsNotExist(err) {
+		return fmt.Errorf("file not found in Trash")
+	}
+	// Read the Trash info file
+	trashInfoFile, err := os.ReadFile(trashInfoFilePath)
+	if err != nil {
+		return err
+	}
+	// Parse the Trash info file
+	trashInfo := strings.Split(string(trashInfoFile), "\n")
+	// Get the original file path
+	originalFilePath := strings.Split(trashInfo[1], "=")[1]
+	// Get the deletion date
+	deletionDate := strings.Split(trashInfo[2], "=")[1]
+	if verbose {
+		fmt.Println("Original file path:", originalFilePath)
+		fmt.Println("Deletion date:", deletionDate)
+	}
+	// Make sure that the original file path matches the file to restore
+	// the path to restore should be the same as the original file path
+	_, originalFileName := path.Split(originalFilePath)
+	_, restoreFileName := path.Split(fileToRestore)
+	if originalFileName != restoreFileName {
+		return fmt.Errorf("file path does not match the original")
+	}
+	// Get the Trash files directory
+	trashFilesDir, err := os.ReadDir(trashFilesPath)
+	if err != nil {
+		return err
+	}
+	// Restore the file
+	for _, entry := range trashFilesDir {
+		println("entry.Name():", entry.Name())
+		if entry.Name() == fileToRestoreName {
+			if verbose {
+				fmt.Println("Found file in Trash:", fileToRestore)
+			}
+			// Get the original file path
+			originalFilePath := filepath.Join(trashFilesPath, entry.Name())
+			// Get the destination path
+			destPath := fileToRestore
+			// Move the file back to the original location
+			err := copyFile(originalFilePath, destPath)
+			if err != nil {
+				return err
+			}
+
+			// Remove the Trash info file
+			err = os.Remove(trashInfoFilePath)
+			if err != nil {
+				return err
+			}
+			// Remove the file from the Trash
+			err = os.Remove(originalFilePath)
+			if err != nil {
+				return err
+			}
+			if verbose {
+				fmt.Println("File restored successfully.")
+			}
+			return nil
+		}
+	}
+	return nil
+}
 
 // getTrashPath returns the path to the Trash directory.
 func getTrashPath() (string, error) {
@@ -86,7 +178,14 @@ func checkIsSymlink(filePath string) (bool, error) {
 }
 
 // moveToTrash moves a file or symlink to the Trash directory.
-func moveToTrash(filePath string, verbose bool) error {
+func moveToTrash(c *cli.Context) error {
+	filePath := c.Args().First()
+	println("filePath:", filePath)
+	if filePath == "" {
+		return fmt.Errorf("file path is required")
+	}
+	verbose := c.Bool("verbose")
+	println("verbose:", verbose)
 	trashFilesPath := getTrashFilesPath()
 	trashInfoPath := getTrashInfoPath()
 	if verbose {
@@ -137,31 +236,7 @@ func moveToTrash(filePath string, verbose bool) error {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <file-path> <verbose> (optional)")
-		return
-	}
-
-	filePath := os.Args[1]
-	verbose := false
-	if len(os.Args) == 3 {
-		verbose = true
-	}
-
-	// Check if file exists
-	if _, err := os.Lstat(filePath); os.IsNotExist(err) {
-		fmt.Println("File does not exist:", filePath)
-		return
-	}
-
-	if err := moveToTrash(filePath, verbose); err != nil {
-		fmt.Println("Error moving file to Trash:", err)
-		return
-	}
-
-	if verbose {
-		fmt.Println("File moved to Trash successfully.")
-	}
+	initApp()
 }
 
 func createTrashMetadata(filePath, trashInfoPath string, verbose bool) error {
