@@ -2,54 +2,139 @@ package main
 
 import (
 	"fmt"
+	"github.com/urfave/cli/v2"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
-func splitBeforeLast(s string, beforeLast string) (string, string) {
-	lastIndex := strings.LastIndex(s, beforeLast)
-	if lastIndex == -1 {
-		return s, "" // Not found
+func restoreFile(c *cli.Context) error {
+	fileToRestore, err := filepath.Abs(c.Args().First())
+	if err != nil {
+		return err
 	}
 
-	secondLastIndex := strings.LastIndex(s[:lastIndex], beforeLast)
-	if secondLastIndex == -1 {
-		return "", s // Only one found
+	if fileToRestore == "" {
+		return fmt.Errorf("file path is required")
 	}
+	verbose := c.Bool("verbose")
+	if verbose {
+		println("Restoring file:", fileToRestore)
+	}
+	// Get the Trash files and info directories
+	trashFilesPath := getTrashFilesPath()
+	trashInfoPath := getTrashInfoPath()
+	if verbose {
+		println("Found Trash files path:", trashFilesPath)
+		println("Found Trash info path:", trashInfoPath)
+	}
+	// Get the Trash info file path
+	fileToRestoreName := filepath.Base(fileToRestore)
+	trashInfoFilePath := filepath.Join(trashInfoPath, fileToRestoreName+".trashinfo")
+	// Check if the Trash info file exists
+	if _, err := os.Lstat(trashInfoFilePath); os.IsNotExist(err) {
+		return fmt.Errorf("file not found in Trash")
+	}
+	// Read the Trash info file
+	trashInfoFile, err := os.ReadFile(trashInfoFilePath)
+	if err != nil {
+		return err
+	}
+	// Parse the Trash info file
+	trashInfo := strings.Split(string(trashInfoFile), "\n")
+	// Get the original file path
+	originalFilePath := strings.Split(trashInfo[1], "=")[1]
+	// Get the deletion date
+	deletionDate := strings.Split(trashInfo[2], "=")[1]
+	if verbose {
+		fmt.Println("Original file path:", originalFilePath)
+		fmt.Println("Deletion date:", deletionDate)
+	}
+	// Make sure that the original file path matches the file to restore
+	// the path to restore should be the same as the original file path
+	_, originalFileName := path.Split(originalFilePath)
+	_, restoreFileName := path.Split(fileToRestore)
+	if originalFileName != restoreFileName {
+		return fmt.Errorf("file path does not match the original")
+	}
+	// Get the Trash files directory
+	trashFilesDir, err := os.ReadDir(trashFilesPath)
+	if err != nil {
+		return err
+	}
+	// Restore the file
+	for _, entry := range trashFilesDir {
+		println("entry.Name():", entry.Name())
+		if entry.Name() == fileToRestoreName {
+			if verbose {
+				fmt.Println("Found file in Trash:", fileToRestore)
+			}
+			// Get the original file path
+			originalFilePath := filepath.Join(trashFilesPath, entry.Name())
+			// Get the destination path
+			destPath := fileToRestore
+			// Move the file back to the original location
+			err := copyFile(originalFilePath, destPath)
+			if err != nil {
+				return err
+			}
 
-	return s[:secondLastIndex], s[:lastIndex]
+			// Remove the Trash info file
+			err = os.Remove(trashInfoFilePath)
+			if err != nil {
+				return err
+			}
+			// Remove the file from the Trash
+			err = os.Remove(originalFilePath)
+			if err != nil {
+				return err
+			}
+			if verbose {
+				fmt.Println("File restored successfully.")
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // getTrashPath returns the path to the Trash directory.
-func getTrashPath() string {
-	return filepath.Join(os.Getenv("HOME"), ".local", "share", "Trash", "files")
+func getTrashPath() (string, error) {
+	trashDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "Trash")
+	// Determine if it's a symlink
+	isSymlink, err := checkIsSymlink(trashDir)
+	if err != nil {
+		return "", err
+	}
+
+	if isSymlink {
+		trashDir, err = os.Readlink(trashDir)
+		if err != nil {
+			return "", err
+		}
+	}
+	return trashDir, nil
+}
+
+// getTrashFilesPath returns the path to the Trash files directory.
+func getTrashFilesPath() string {
+	trashDir, err := getTrashPath()
+	if err != nil {
+		panic(err)
+	}
+	return filepath.Join(trashDir, "files")
 }
 
 // getTrashInfoPath returns the path to the Trash info directory.
 func getTrashInfoPath() string {
-	return filepath.Join(os.Getenv("HOME"), ".local", "share", "Trash", "info")
-}
-
-// getFileSystemDeviceID returns the device ID of the filesystem containing the path.
-func getFileSystemDeviceID(path string) (uint64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, err
-	}
-	return stat.Bfree, nil
-}
-
-// copySymlink copies a symlink to the Trash directory.
-func copySymlink(srcPath, destPath string) error {
-	target, err := os.Readlink(srcPath)
+	trashDir, err := getTrashPath()
 	if err != nil {
-		return err
+		panic(err)
 	}
-	return os.Symlink(target, destPath)
+	return filepath.Join(trashDir, "info")
 }
 
 // copyFile copies a file from source to destination.
@@ -84,13 +169,33 @@ func copyFile(srcPath, destPath string) error {
 	return nil
 }
 
+func checkIsSymlink(filePath string) (bool, error) {
+	fi, err := os.Lstat(filePath)
+	if err != nil {
+		return false, err
+	}
+	return fi.Mode()&os.ModeSymlink != 0, nil
+}
+
 // moveToTrash moves a file or symlink to the Trash directory.
-func moveToTrash(filePath string) error {
-	trashPath := getTrashPath()
+func moveToTrash(c *cli.Context) error {
+	filePath := c.Args().First()
+	println("filePath:", filePath)
+	if filePath == "" {
+		return fmt.Errorf("file path is required")
+	}
+	verbose := c.Bool("verbose")
+	println("verbose:", verbose)
+	trashFilesPath := getTrashFilesPath()
 	trashInfoPath := getTrashInfoPath()
+	if verbose {
+		println("Found Trash files path:", trashFilesPath)
+		println("Found Trash info path:", trashInfoPath)
+	}
+	destDir := trashFilesPath
 
 	// Create the Trash directories if they don't exist
-	if err := os.MkdirAll(trashPath, os.ModePerm); err != nil {
+	if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(trashInfoPath, os.ModePerm); err != nil {
@@ -99,103 +204,45 @@ func moveToTrash(filePath string) error {
 
 	// Get the destination path in the Trash directory
 	_, fileName := filepath.Split(filePath)
-	destPath := filepath.Join(trashPath, fileName)
+	destPath := filepath.Join(destDir, fileName)
 
-	// Get filesystem device IDs
-	origDev, err := getFileSystemDeviceID(filePath)
-	if err != nil {
-		return err
-	}
-	homeDir := os.Getenv("HOME")
-	homeDev, err := getFileSystemDeviceID(homeDir)
-	if err != nil {
-		return err
+	// Determine if the file is on a different filesystem
+	trashOnDiffFileSystem := false
+	if strings.HasPrefix(destDir, "/mnt") {
+		trashOnDiffFileSystem = true
 	}
 
-	// Determine if it's a symlink
-	isSymlink := false
-	println("Dest path:", destPath)
-	destDir, _ := splitBeforeLast(destPath, "/")
-	fi, err := os.Lstat(destDir)
-	if err != nil {
-		return err
-	}
-
-	if fi.Mode()&os.ModeSymlink != 0 {
-		isSymlink = true
-	}
-
-	symLinkOnDiffFileSystem := false
-	if isSymlink {
-		println("Dest pat1h:", destDir)
-		destPath, err = os.Readlink(destDir)
-		destPath = filepath.Join(destPath, "files", fileName)
+	// If the symlink points to a different filesystem, move it safely to Trash
+	if trashOnDiffFileSystem {
+		err := copyFile(filePath, destPath)
 		if err != nil {
 			return err
 		}
-		if strings.HasPrefix(destPath, "/mnt") {
-			symLinkOnDiffFileSystem = true
-		}
-	}
-
-	// Handle symlinks
-	if isSymlink {
-		println("Symlink found")
-		println("Dest path:", destPath)
-		// If the symlink points to a different filesystem, copy it to Trash
-		// Check if the symlink is on a different filesystem
-		if symLinkOnDiffFileSystem {
-			fmt.Println("Symlink is on a different filesystem, copying to Trash.")
-			println("Dest path88:", destDir)
-
-			err := copyFile(filePath, destPath)
-			if err != nil {
-				return err
-			}
-			err = createTrashMetadata(filePath, trashInfoPath)
-			if err != nil {
-				return err
-			}
-			return os.Remove(filePath)
-		}
-		print("Symlink is on the same filesystem, moving to Trash.")
-	}
-
-	// Handle regular files
-	if origDev != homeDev {
-		fmt.Println("File is on a different filesystem, copying to Trash.")
-		if err := copyFile(filePath, destPath); err != nil {
+		err = createTrashMetadata(filePath, trashInfoPath, verbose)
+		if err != nil {
 			return err
 		}
 		return os.Remove(filePath)
 	}
-	return os.Rename(filePath, destPath)
+	err := os.Rename(filePath, destPath)
+	if err != nil {
+		return err
+	}
+	err = createTrashMetadata(filePath, trashInfoPath, verbose)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <file-path>")
-		return
-	}
-
-	filePath := os.Args[1]
-
-	// Check if file exists
-	if _, err := os.Lstat(filePath); os.IsNotExist(err) {
-		fmt.Println("File does not exist:", filePath)
-		return
-	}
-
-	if err := moveToTrash(filePath); err != nil {
-		fmt.Println("Error moving file to Trash:", err)
-		return
-	}
-
-	fmt.Println("File moved to Trash successfully.")
+	initApp()
 }
 
-func createTrashMetadata(filePath, trashInfoPath string) error {
-	fmt.Println("Creating metadata for file:", filePath, "in Trash info path:", trashInfoPath)
+func createTrashMetadata(filePath, trashInfoPath string, verbose bool) error {
+	if verbose {
+		fmt.Println("Creating metadata for file", filePath, "in", trashInfoPath)
+	}
 	// Extract the file name from the file path
 	_, fileName := filepath.Split(filePath)
 
