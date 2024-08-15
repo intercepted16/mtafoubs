@@ -1,4 +1,4 @@
-module mv-trash-fs
+module mtafoubs
 
 go 1.22
 
