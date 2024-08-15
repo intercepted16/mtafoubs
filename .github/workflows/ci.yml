@@ -1,0 +1,82 @@
+name: Test and Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        go: [ 'stable', 'oldstable' ]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Cache Go Modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/bin
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Go Format
+        run: |
+          gofmt -s -w .
+          if [ -n "$(git diff --exit-code)" ]; then
+            echo "::warning::there are uncommitted changes after running go fmt"
+          fi
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Go Tidy
+        run: go mod tidy
+
+      - name: Go Mod Download
+        run: go mod download
+
+      - name: Go Mod Verify
+        run: go mod verify
+
+      - name: Go Generate
+        run: |
+          go generate ./...
+          if [ -n "$(git diff --exit-code)" ]; then
+            echo "::warning::there are uncommitted changes after running go generate"
+          fi
+
+      - name: Go Build
+        run: go build -o mtafoubs ./...
+
+      - name: Go Test
+        if: ${{ inputs.skipTests == 'false' }}
+        run: go test -v -count=1 -race -shuffle=on -coverprofile=coverage.txt ./...
+
+      - name: Go Compile Tests
+        if: ${{ inputs.skipTests == 'true' }}
+        run: go test -exec /bin/true ./...
+
+      - name: Create and Push Tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git tag "build-$(date +'%Y%m%d%H%M%S')"
+          git push origin --tags
+
+      - name: Upload Compiled File
+        uses: actions/upload-artifact@v3
+        with:
+          name: mtafoubs
+          path: mtafoubs
