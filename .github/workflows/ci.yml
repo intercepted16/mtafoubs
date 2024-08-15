@@ -1,5 +1,6 @@
 name: Test and Build
-
+permissions:
+  contents: write
 on:
   push:
   pull_request:
