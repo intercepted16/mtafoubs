@@ -67,9 +67,12 @@ jobs:
         run: |
           git tag "build-$(date +'%Y%m%d%H%M%S')"
           git push origin --tags
+      - name: Set timestamp
+        id: set_timestamp
+        run: echo "timestamp=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
       - name: Upload Compiled File
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "build-$(date +'%Y%m%d%H%M%S')"
+          tag_name: ${{ steps.set_timestamp.outputs.timestamp }}
           files: |
             mtafoubs
