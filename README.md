@@ -1,4 +1,6 @@
 # mtafoubs
+(Move Trash Across Filesystems On Unix Based Systems)
+
 ![alt text](docs/image.png)
 
 `mtafoubs` is a simple Go CLI tool to move trash across Linux systems. It is inspired by `trash-cli`. Though, what makes it different is: it allows moving trash across fileystems; i.e: you can make your Trash directory a symlink to store it on a NAS! This saves space and allows you to keep trash for longer.
